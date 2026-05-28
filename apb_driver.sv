@@ -1,4 +1,4 @@
-// agents/apb_agent/apb_driver.sv
+// apb_driver.sv
 `ifndef APB_DRIVER_SV
 `define APB_DRIVER_SV
 
@@ -22,6 +22,9 @@ class apb_driver extends uvm_driver #(apb_transaction);
         // Inicializar señales
         vif.drv_cb.psel <= 0;
         vif.drv_cb.penable <= 0;
+        vif.drv_cb.paddr <= 0;
+        vif.drv_cb.pwdata <= 0;
+        vif.drv_cb.pwrite <= 0;
         
         forever begin
             apb_transaction tx;
@@ -32,12 +35,18 @@ class apb_driver extends uvm_driver #(apb_transaction);
     endtask
     
     task drive_transaction(apb_transaction tx);
+        int timeout;  // Declarar al inicio del task
+        timeout = 1000;  // Asignar valor después
+        
         // Fase 1: Setup
+        @(posedge vif.pclk);
         vif.drv_cb.psel <= 1;
         vif.drv_cb.penable <= 0;
         vif.drv_cb.paddr <= tx.addr;
         vif.drv_cb.pwrite <= tx.write;
-        vif.drv_cb.pwdata <= tx.data;
+        if (tx.write) begin
+            vif.drv_cb.pwdata <= tx.data;
+        end
         
         @(posedge vif.pclk);
         
@@ -46,9 +55,14 @@ class apb_driver extends uvm_driver #(apb_transaction);
         
         @(posedge vif.pclk);
         
-        // Fase 3: Esperar ready
-        while(vif.pready === 1'b0) begin
+        // Fase 3: Esperar ready (con timeout)
+        while(vif.pready === 1'b0 && timeout > 0) begin
             @(posedge vif.pclk);
+            timeout = timeout - 1;
+        end
+        
+        if (timeout == 0) begin
+            `uvm_error(get_type_name(), $sformatf("APB transaction timeout at addr 0x%0h", tx.addr))
         end
         
         // Fase 4: Capturar respuesta
@@ -60,6 +74,12 @@ class apb_driver extends uvm_driver #(apb_transaction);
         // Fase 5: Finalizar
         vif.drv_cb.psel <= 0;
         vif.drv_cb.penable <= 0;
+        
+        // Reportar error si ocurrió
+        if (tx.slverr) begin
+            `uvm_warning(get_type_name(), $sformatf("APB %s at addr 0x%0h returned error (pslverr=1)", 
+                          tx.write ? "WRITE" : "READ", tx.addr))
+        end
         
         `uvm_info(get_type_name(), tx.convert2string(), UVM_HIGH)
     endtask
