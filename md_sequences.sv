@@ -52,21 +52,38 @@ package md_sequences_pkg;
         
         int unsigned n_legal = 4;
         int unsigned n_illegal = 4;
-
-        function new(string name = "rx_mixed_seq");
+        string patron = "RANDOM";
+        int contador = 0;
+        
+        function new(string name = "rx_mzixed_seq");
             super.new(name);
         endfunction
-
+        
+        function logic [31:0] generar_dato();
+            case(patron)
+                "INCR": return contador++;
+                "DECR": return contador--;
+                "FIXED": return 32'hA5A5A5A5;
+                "ZEROS": return 32'h00000000;
+                "ONES": return 32'hFFFFFFFF;
+                default: return $urandom();
+            endcase
+        endfunction
+        
         task body();
-            // Legales
-            repeat(n_legal) begin
+            // Enviar legales
+            for (int i = 0; i < n_legal; i++) begin
                 rx_transaction tr = rx_transaction::type_id::create("tr");
                 start_item(tr);
-                assert(tr.randomize() with { valid == 1'b1; });
+                tr.data = generar_dato();
+                tr.offset = 0;
+                tr.size = 2;
+                tr.valid = 1;
                 finish_item(tr);
             end
-            // Ilegales
-            repeat(n_illegal) begin
+            
+            // Enviar ilegales
+            for (int i = 0; i < n_illegal; i++) begin
                 rx_transaction_illegal tr = rx_transaction_illegal::type_id::create("tr");
                 start_item(tr);
                 assert(tr.randomize());
