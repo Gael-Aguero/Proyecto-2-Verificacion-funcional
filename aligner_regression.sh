@@ -13,10 +13,11 @@ echo "=========================================="
 echo "  REGRESIÓN ALIGNER - $NUM_TESTS pruebas"
 echo "=========================================="
 
-# Compilar una sola vez (no hay parámetros de compilación porque usamos plusargs)
+# Compilar una sola vez
 echo ""
 echo "Compilando testbench..."
 vcs -sverilog -timescale=1ns/1ps \
+    -ntb_opts uvm-1.2 \
     tb_top.sv \
     -o simv \
     -l compile.log

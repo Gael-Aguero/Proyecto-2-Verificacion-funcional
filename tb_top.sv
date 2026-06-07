@@ -22,13 +22,13 @@
 // ============================================================================
 // COMPONENTES APB
 // ============================================================================
-`include "apb_components.sv"
+`include "apb_componentes.sv"
 
 // ============================================================================
 // COMPONENTES MD Y TB
 // ============================================================================
 `include "aligner_tb_pkg.sv"
-`include "md_components.sv"
+`include "md_componentes.sv"
 `include "scoreboard.sv"
 `include "aligner_env.sv"
 `include "md_sequences.sv"
