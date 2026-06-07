@@ -19,34 +19,52 @@ package md_sequences_pkg;
         endtask
     endclass : md_base_seq
 
-    // Secuencia con paquetes fijos 
+    // Secuencia con paquetes legales de tamaño fijo
     class rx_fixed_seq extends md_base_seq;
         `uvm_object_utils(rx_fixed_seq)
         
         int unsigned n_pkts = 8;
         logic [1:0]  fixed_offset = 2'b00;
         logic [2:0]  fixed_size   = 3'd2;
+        string patron = "RANDOM";
+        int contador = 0;
 
         function new(string name = "rx_fixed_seq");
             super.new(name);
         endfunction
+        
+        function logic [31:0] generar_dato();
+            logic [31:0] resultado;
+            case(patron)
+                "INCR": resultado = contador++;
+                "DECR": resultado = contador--;
+                "FIXED": resultado = 32'hA5A5A5A5;
+                "ZEROS": resultado = 32'h00000000;
+                "ONES": resultado = 32'hFFFFFFFF;
+                default: resultado = $urandom();
+            endcase
+            return resultado;
+        endfunction
 
         task body();
-            repeat(n_pkts) begin
+            for (int i = 0; i < n_pkts; i++) begin
                 rx_transaction tr = rx_transaction::type_id::create("tr");
                 start_item(tr);
-                // Forzar valores LEGALES solamente
+                // Forzar valores LEGALES
                 assert(tr.randomize() with {
                     valid == 1'b1;
                     offset == fixed_offset;
                     size == fixed_size;
                 });
+                tr.data = generar_dato();
                 finish_item(tr);
+                // Pequeña pausa entre paquetes
+                #($urandom_range(1, 20));
             end
         endtask
     endclass : rx_fixed_seq
 
-    // Secuencia mixta (legales + ilegales)
+    // Secuencia mixta (legales + ilegales) 
     class rx_mixed_seq extends md_base_seq;
         `uvm_object_utils(rx_mixed_seq)
         
@@ -55,19 +73,37 @@ package md_sequences_pkg;
         string patron = "RANDOM";
         int contador = 0;
         
-        function new(string name = "rx_mzixed_seq");
+        // Lista de combinaciones legales posibles
+        int legal_sizes[$] = {1, 2, 3, 4};
+        int legal_offsets[$] = {0, 0, 0, 0};  // Para size=1 offset puede ser 0-3?
+        // Corregir: las combinaciones legales dependen de size y offset
+        
+        function new(string name = "rx_mixed_seq");
             super.new(name);
+            // Inicializar combinaciones legales
+            legal_sizes.delete();
+            legal_offsets.delete();
+            for (int s = 1; s <= 4; s++) begin
+                for (int o = 0; o < 4; o++) begin
+                    if (((4 + o) % s) == 0) begin
+                        legal_sizes.push_back(s);
+                        legal_offsets.push_back(o);
+                    end
+                end
+            end
         endfunction
         
         function logic [31:0] generar_dato();
+            logic [31:0] resultado;
             case(patron)
-                "INCR": return contador++;
-                "DECR": return contador--;
-                "FIXED": return 32'hA5A5A5A5;
-                "ZEROS": return 32'h00000000;
-                "ONES": return 32'hFFFFFFFF;
-                default: return $urandom();
+                "INCR": resultado = contador++;
+                "DECR": resultado = contador--;
+                "FIXED": resultado = 32'hA5A5A5A5;
+                "ZEROS": resultado = 32'h00000000;
+                "ONES": resultado = 32'hFFFFFFFF;
+                default: resultado = $urandom();
             endcase
+            return resultado;
         endfunction
         
         task body();
@@ -75,11 +111,18 @@ package md_sequences_pkg;
             for (int i = 0; i < n_legal; i++) begin
                 rx_transaction tr = rx_transaction::type_id::create("tr");
                 start_item(tr);
+                // Elegir combinación legal aleatoria
+                int idx = $urandom_range(legal_sizes.size() - 1);
+                assert(tr.randomize() with {
+                    valid == 1'b1;
+                    size == legal_sizes[idx];
+                    offset == legal_offsets[idx];
+                });
                 tr.data = generar_dato();
-                tr.offset = 0;
-                tr.size = 2;
-                tr.valid = 1;
                 finish_item(tr);
+                `uvm_info(get_type_name(), $sformatf("Enviado LEGAL: off=%0d size=%0d data=0x%08X", 
+                          tr.offset, tr.size, tr.data), UVM_MEDIUM)
+                #($urandom_range(1, 20));
             end
             
             // Enviar ilegales
@@ -87,7 +130,11 @@ package md_sequences_pkg;
                 rx_transaction_illegal tr = rx_transaction_illegal::type_id::create("tr");
                 start_item(tr);
                 assert(tr.randomize());
+                tr.data = generar_dato();
                 finish_item(tr);
+                `uvm_info(get_type_name(), $sformatf("Enviado ILEGAL: off=%0d size=%0d data=0x%08X", 
+                          tr.offset, tr.size, tr.data), UVM_MEDIUM)
+                #($urandom_range(1, 20));
             end
         endtask
     endclass : rx_mixed_seq
@@ -97,9 +144,24 @@ package md_sequences_pkg;
         `uvm_object_utils(rx_stress_seq)
         
         int unsigned n_pkts = 100;
+        string patron = "RANDOM";
+        int contador = 0;
 
         function new(string name = "rx_stress_seq");
             super.new(name);
+        endfunction
+        
+        function logic [31:0] generar_dato();
+            logic [31:0] resultado;
+            case(patron)
+                "INCR": resultado = contador++;
+                "DECR": resultado = contador--;
+                "FIXED": resultado = 32'hA5A5A5A5;
+                "ZEROS": resultado = 32'h00000000;
+                "ONES": resultado = 32'hFFFFFFFF;
+                default: resultado = $urandom();
+            endcase
+            return resultado;
         endfunction
 
         task body();
@@ -107,7 +169,12 @@ package md_sequences_pkg;
                 rx_transaction tr = rx_transaction::type_id::create("tr");
                 start_item(tr);
                 assert(tr.randomize());
+                tr.data = generar_dato();
                 finish_item(tr);
+                // Backpressure aleatorio: a veces pausar
+                if ($urandom_range(0, 100) < 30) begin
+                    #($urandom_range(10, 100));
+                end
             end
         endtask
     endclass : rx_stress_seq

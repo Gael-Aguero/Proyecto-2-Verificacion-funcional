@@ -7,6 +7,92 @@ package scoreboard_pkg;
     `include "uvm_macros.svh"
     import aligner_tb_pkg::*;
 
+    class ref_model;
+        // Configuración actual
+        logic [1:0] cfg_offset;
+        logic [2:0] cfg_size;
+        localparam int BYTES_PER_WORD = 4;
+        
+        // Buffer de datos no alineados (bytes pendientes)
+        logic [7:0] pending_bytes[$];
+        
+        // Estadísticas
+        int tx_packets_generated = 0;
+        int rx_packets_consumed = 0;
+        
+        function new();
+            cfg_offset = 2'b00;
+            cfg_size = 3'd4;
+        endfunction
+        
+        function void set_config(logic [1:0] offset, logic [2:0] size);
+            cfg_offset = offset;
+            cfg_size = size;
+        endfunction
+        
+        // Procesar un paquete RX y generar los TX esperados
+        function void process_rx_packet(rx_transaction rx, ref tx_transaction tx_queue[$]);
+            logic [7:0] rx_bytes[0:3];
+            int src_byte_idx;
+            
+            // Extraer bytes del dato RX (asumiendo little-endian)
+            for (int i = 0; i < BYTES_PER_WORD; i++) begin
+                rx_bytes[i] = rx.data[i*8 +: 8];
+            end
+            
+            // Extraer bytes válidos según offset y size del RX
+            for (int i = 0; i < rx.size; i++) begin
+                src_byte_idx = rx.offset + i;
+                if (src_byte_idx < BYTES_PER_WORD) begin
+                    pending_bytes.push_back(rx_bytes[src_byte_idx]);
+                end
+            end
+            
+            // Generar tantos TX como sea posible con los bytes pendientes
+            while (pending_bytes.size() >= cfg_size) begin
+                tx_transaction tx = tx_transaction::type_id::create("tx");
+                tx.size = cfg_size;
+                tx.offset = cfg_offset;
+                tx.valid = 1;
+                tx.err = 0;
+                
+                // Construir palabra alineada (little-endian)
+                for (int i = 0; i < cfg_size; i++) begin
+                    logic [7:0] byte_val = pending_bytes[i];
+                    tx.data[i*8 +: 8] = byte_val;
+                end
+                
+                // Remover bytes usados del pending buffer
+                for (int i = 0; i < cfg_size; i++) begin
+                    pending_bytes.pop_front();
+                end
+                
+                tx_queue.push_back(tx);
+                tx_packets_generated++;
+            end
+            
+            rx_packets_consumed++;
+        endfunction
+        
+        // Limpiar el modelo (reset)
+        function void reset();
+            pending_bytes.delete();
+            tx_packets_generated = 0;
+            rx_packets_consumed = 0;
+        endfunction
+        
+        // Obtener bytes pendientes
+        function int get_pending_count();
+            return pending_bytes.size();
+        endfunction
+        
+        // Verificar si un paquete RX debe ser dropeado
+        function bit should_drop(rx_transaction rx);
+            if (rx.size == 0) return 1;
+            return (( (BYTES_PER_WORD + rx.offset) % rx.size ) != 0);
+        endfunction
+    endclass : ref_model
+
     class scoreboard extends uvm_scoreboard;
         `uvm_component_utils(scoreboard)
 
@@ -14,18 +100,26 @@ package scoreboard_pkg;
         uvm_analysis_imp_tx  #(tx_transaction,  scoreboard) tx_export;
         uvm_analysis_imp_irq #(irq_transaction, scoreboard) irq_export;
 
-        rx_transaction rx_queue[$];
-        int unsigned expected_drops, actual_drops, tx_count, drop_count, error_count;
-        int unsigned irq_count;
-
-        logic [1:0] cfg_offset;
-        logic [2:0] cfg_size;
-        localparam int ALGN_DATA_WIDTH = 32;
+        // Modelo de referencia
+        ref_model model;
+        
+        // Colas para comparación
+        tx_transaction expected_tx_queue[$];
+        
+        // Contadores
+        int expected_drop_count = 0;
+        int rx_packet_count = 0;
+        int tx_match_count = 0;
+        int tx_mismatch_count = 0;
+        int error_count = 0;
+        
+        // Para verificación final
+        int actual_drop_count = 0;
+        int irq_count = 0;
 
         function new(string name, uvm_component parent);
             super.new(name, parent);
-            cfg_offset = 2'b00;
-            cfg_size   = 3'd4;
+            model = new();
         endfunction
 
         function void build_phase(uvm_phase phase);
@@ -36,126 +130,166 @@ package scoreboard_pkg;
         endfunction
 
         function void set_cfg(logic [1:0] off, logic [2:0] sz);
-            cfg_offset = off;
-            cfg_size   = sz;
+            model.set_config(off, sz);
+            `uvm_info(get_type_name(), $sformatf("Config actualizada: offset=%0d size=%0d", off, sz), UVM_LOW)
         endfunction
 
         function void write_rx(rx_transaction tr);
-            int unsigned n_bytes   = tr.size;
-            int unsigned resultado = ((ALGN_DATA_WIDTH/8) + tr.offset) % n_bytes;
-            bit is_drop = (resultado != 0);
-
-            `uvm_info("SB", $sformatf("[RX] data=0x%08X off=%0d size=%0d drop=%0b",
-                      tr.data, tr.offset, tr.size, is_drop), UVM_MEDIUM)
-
-            if (is_drop) begin
-                expected_drops++;
-                drop_count++;
+            rx_packet_count++;
+            
+            // Verificar si el DUT debería haber dropeado este paquete
+            bit should_drop = model.should_drop(tr);
+            
+            `uvm_info(get_type_name(), $sformatf("[RX] #%0d: data=0x%08X off=%0d size=%0d err=%0b should_drop=%0b",
+                      rx_packet_count, tr.data, tr.offset, tr.size, tr.err, should_drop), UVM_MEDIUM)
+            
+            if (tr.err) begin
+                if (!should_drop) begin
+                    `uvm_error(get_type_name(), $sformatf(
+                        "FALSO DROP: RX#%0d data=0x%08X off=%0d size=%0d -> DUT marcó error pero debería ser válido",
+                        rx_packet_count, tr.data, tr.offset, tr.size))
+                    error_count++;
+                end else begin
+                    expected_drop_count++;
+                    `uvm_info(get_type_name(), $sformatf("DROP OK: RX#%0d off=%0d size=%0d", 
+                              rx_packet_count, tr.offset, tr.size), UVM_LOW)
+                end
             end else begin
-                rx_transaction exp = rx_transaction::type_id::create("exp");
-                exp.copy(tr);
-                rx_queue.push_back(exp);
+                if (should_drop) begin
+                    `uvm_error(get_type_name(), $sformatf(
+                        "DROP PERDIDO: RX#%0d data=0x%08X off=%0d size=%0d -> DUT NO marcó error pero debería",
+                        rx_packet_count, tr.data, tr.offset, tr.size))
+                    error_count++;
+                end else begin
+                    // Procesar en el modelo de referencia
+                    model.process_rx_packet(tr, expected_tx_queue);
+                    `uvm_info(get_type_name(), $sformatf("RX PROCESADO: #%0d, pending_bytes=%0d, expected_tx=%0d", 
+                              rx_packet_count, model.get_pending_count(), expected_tx_queue.size()), UVM_HIGH)
+                end
             end
         endfunction
 
         function void write_tx(tx_transaction tr);
-            rx_transaction expected_rx;
-            logic [31:0] expected_data;
-
-            if (tr.offset !== 2'b00) begin
-                `uvm_error("SB", $sformatf("[TX ERROR] offset=%0d != 0", tr.offset))
-                error_count++; return;
-            end
+            tx_transaction expected;
             
-            if (rx_queue.size() == 0) begin
-                `uvm_error("SB", $sformatf("[TX ERROR] dato inesperado 0x%08X", tr.data))
-                error_count++; 
+            `uvm_info(get_type_name(), $sformatf("[TX] data=0x%08X off=%0d size=%0d", 
+                      tr.data, tr.offset, tr.size), UVM_MEDIUM)
+            
+            // Verificar que offset sea 0 (requerido por especificación)
+            if (tr.offset !== 2'b00) begin
+                `uvm_error(get_type_name(), $sformatf("TX offset=%0d != 0", tr.offset))
+                error_count++;
                 return;
             end
-
-            expected_rx   = rx_queue.pop_front();
-            expected_data = calc_expected_tx_data(expected_rx);
             
-            `uvm_info("SB", $sformatf("[COMPARE] Esperado: 0x%08X, Recibido: 0x%08X", 
-                      expected_data, tr.data), UVM_MEDIUM)
-
-            if (tr.data !== expected_data) begin
-                `uvm_error("SB", $sformatf("[TX ERROR] esperado=0x%08X recibido=0x%08X (rx_data=0x%08X, rx_off=%0d, cfg_off=%0d, cfg_sz=%0d)",
-                            expected_data, tr.data, expected_rx.data, 
-                            expected_rx.offset, cfg_offset, cfg_size))
+            if (expected_tx_queue.size() == 0) begin
+                `uvm_error(get_type_name(), $sformatf(
+                    "TX INESPERADO: data=0x%08X size=%0d (no hay TX esperado en cola)",
+                    tr.data, tr.size))
+                tx_mismatch_count++;
                 error_count++;
+                return;
+            end
+            
+            expected = expected_tx_queue.pop_front();
+            
+            // Comparar datos y tamaño
+            if (tr.data !== expected.data) begin
+                `uvm_error(get_type_name(), $sformatf(
+                    "TX DATA MISMATCH:\n  Esperado: 0x%08X\n  Recibido: 0x%08X\n  rx_packets=%0d, tx_packets_model=%0d",
+                    expected.data, tr.data, model.rx_packets_consumed, model.tx_packets_generated))
+                error_count++;
+                tx_mismatch_count++;
+            end else if (tr.size !== expected.size) begin
+                `uvm_error(get_type_name(), $sformatf(
+                    "TX SIZE MISMATCH: esperado=%0d recibido=%0d", expected.size, tr.size))
+                error_count++;
+                tx_mismatch_count++;
             end else begin
-                `uvm_info("SB", $sformatf("[TX OK] 0x%08X", tr.data), UVM_MEDIUM)
-                tx_count++;
+                `uvm_info(get_type_name(), $sformatf("TX MATCH OK: data=0x%08X size=%0d", 
+                          tr.data, tr.size), UVM_MEDIUM)
+                tx_match_count++;
             end
         endfunction
 
         function void write_irq(irq_transaction tr);
             irq_count++;
-            `uvm_info("SB", $sformatf("[IRQ #%0d] @ %0t", irq_count, tr.timestamp), UVM_LOW)
+            `uvm_info(get_type_name(), $sformatf("[IRQ #%0d] @ %0t", irq_count, tr.timestamp), UVM_LOW)
         endfunction
 
-        function void set_actual_drops(int unsigned drops);
-            actual_drops = drops;
-            if (actual_drops !== expected_drops)
-                `uvm_error("SB", $sformatf("[CNT_DROP ERROR] esperado=%0d leído=%0d",
-                            expected_drops, actual_drops))
-            else
-                `uvm_info("SB", $sformatf("[CNT_DROP OK] %0d", actual_drops), UVM_LOW)
-        endfunction
-
-        function void verify_irq_count(int unsigned expected);
-            if (irq_count < expected)
-                `uvm_error("SB", $sformatf("[IRQ ERROR] esperados>=%0d recibidos=%0d",
-                            expected, irq_count))
-            else
-                `uvm_info("SB", $sformatf("[IRQ OK] count=%0d", irq_count), UVM_LOW)
+        function void set_actual_drops(int drops);
+            actual_drop_count = drops;
+            if (expected_drop_count != actual_drop_count) begin
+                `uvm_error(get_type_name(), $sformatf(
+                    "CNT_DROP MISMATCH: esperado=%0d leído=%0d", expected_drop_count, actual_drop_count))
+                error_count++;
+            end else begin
+                `uvm_info(get_type_name(), $sformatf("CNT_DROP OK: %0d", actual_drop_count), UVM_LOW)
+            end
         endfunction
 
         function void check_phase(uvm_phase phase);
-            if (rx_queue.size() > 0) begin
-                `uvm_error("SB", $sformatf("[FINAL] %0d RX sin TX correspondiente",
-                            rx_queue.size()))
+            if (expected_tx_queue.size() > 0) begin
+                `uvm_error(get_type_name(), $sformatf(
+                    "TX PENDIENTES EN MODELO: %0d TX esperados no se recibieron",
+                    expected_tx_queue.size()))
                 error_count++;
             end
-            `uvm_info("SB", $sformatf(
-                "\n==========================================\n  TX OK:%0d  Drops:%0d  IRQs:%0d  Errores:%0d\n==========================================",
-                tx_count, drop_count, irq_count, error_count), UVM_NONE)
-            if (error_count > 0) `uvm_error("SB", "TEST FALLIDO")
-            else                  `uvm_info("SB",  "TEST PASADO", UVM_NONE)
-        endfunction
-
-        function logic [31:0] calc_expected_tx_data(rx_transaction rx);
-            logic [31:0] result = 32'h0;
-            logic [7:0] bytes[0:3];
-            int src_byte;
             
-            // Extraer bytes individuales del dato RX (little-endian)
-            for (int i = 0; i < 4; i++) begin
-                bytes[i] = rx.data[i*8 +: 8];
+            if (model.get_pending_count() > 0) begin
+                `uvm_warning(get_type_name(), $sformatf(
+                    "BYTES PENDIENTES EN MODELO: %0d (puede ser normal si el test terminó abruptamente)",
+                    model.get_pending_count()))
             end
             
-            `uvm_info("SB", $sformatf("[CALC] RX data: 0x%08X -> bytes: [0]=0x%02X, [1]=0x%02X, [2]=0x%02X, [3]=0x%02X",
-                      rx.data, bytes[0], bytes[1], bytes[2], bytes[3]), UVM_HIGH)
+            `uvm_info(get_type_name(), $sformatf(
+                "\n==========================================\n"
+                "  RESUMEN SCOREBOARD\n"
+                "==========================================\n"
+                "  RX packets recibidos:   %0d\n"
+                "  Drops esperados:        %0d\n"
+                "  Drops reales (CNT_DROP):%0d\n"
+                "  TX generados (modelo):  %0d\n"
+                "  TX recibidos:           %0d\n"
+                "  TX correctos:           %0d\n"
+                "  TX incorrectos:         %0d\n"
+                "  IRQs recibidas:         %0d\n"
+                "  Errores totales:        %0d\n"
+                "==========================================",
+                rx_packet_count,
+                expected_drop_count,
+                actual_drop_count,
+                model.tx_packets_generated,
+                tx_match_count + tx_mismatch_count,
+                tx_match_count,
+                tx_mismatch_count,
+                irq_count,
+                error_count), UVM_NONE)
             
-            // Opción 1: Extraer bytes desde offset y ponerlos en orden (little-endian)
-            for (int i = 0; i < int'(cfg_size); i++) begin
-                src_byte = int'(rx.offset) + i;
-                if (src_byte < 4) begin
-                    // Mantener el orden original de los bytes
-                    result[i*8 +: 8] = bytes[src_byte];
-                end
+            if (error_count > 0) begin
+                `uvm_error(get_type_name(), "TEST FALLIDO")
+            end else begin
+                `uvm_info(get_type_name(), "TEST PASADO", UVM_NONE)
             end
-            
-            `uvm_info("SB", $sformatf("[CALC] Resultado esperado: 0x%08X", result), UVM_HIGH)
-            
-            return result;
         endfunction
 
         function void reset_counters();
-            rx_queue.delete();
-            expected_drops = 0; actual_drops = 0;
-            tx_count = 0; drop_count = 0; error_count = 0; irq_count = 0;
+            expected_tx_queue.delete();
+            model.reset();
+            expected_drop_count = 0;
+            actual_drop_count = 0;
+            rx_packet_count = 0;
+            tx_match_count = 0;
+            tx_mismatch_count = 0;
+            error_count = 0;
+            irq_count = 0;
+        endfunction
+        
+        // Función para debug - imprimir estado del modelo
+        function void print_model_status();
+            `uvm_info(get_type_name(), $sformatf(
+                "MODEL STATUS: pending_bytes=%0d, tx_generated=%0d, rx_consumed=%0d",
+                model.get_pending_count(), model.tx_packets_generated, model.rx_packets_consumed), UVM_LOW)
         endfunction
     endclass : scoreboard
 
