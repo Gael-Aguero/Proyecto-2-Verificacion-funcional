@@ -55,11 +55,6 @@ package scoreboard_pkg;
                 tx.offset = cfg_offset;
                 tx.valid  = 1;
                 tx.err    = 0;
-                
-                // FIX BUG 2+3: construir la palabra alineada colocando los bytes
-                // en la posición correcta del bus según cfg_offset.
-                // El DUT emite md_tx_data con los bytes válidos en
-                // [(cfg_offset+i)*8 +: 8], no siempre en los bits bajos.
                 tx.data = 32'h0;
                 for (int i = 0; i < cfg_size; i++) begin
                     tx.data[(cfg_offset + i) * 8 +: 8] = pending_bytes[i];
@@ -184,9 +179,6 @@ package scoreboard_pkg;
                 $sformatf("[TX] data=0x%08X off=%0d size=%0d", tr.data, tr.offset, tr.size),
                 UVM_MEDIUM)
             
-            // FIX BUG 2: el TX offset debe coincidir con cfg_offset (CTRL.OFFSET),
-            // NO necesariamente con 0. El código anterior rechazaba cualquier
-            // offset != 0, lo que era incorrecto según el datasheet.
             if (tr.offset !== model.cfg_offset) begin
                 `uvm_error(get_type_name(),
                     $sformatf("TX OFFSET INCORRECTO: recibido=%0d esperado=%0d (CTRL.OFFSET)",

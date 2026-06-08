@@ -153,12 +153,4 @@ module tb_top;
         run_test();
     end
     
-    // ========================================================================
-    // Dump waves para depuración
-    // ========================================================================
-    initial begin
-        $dumpfile("waves.vcd");
-        $dumpvars(0, tb_top);
-    end
-    
 endmodule : tb_top

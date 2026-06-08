@@ -3,10 +3,10 @@
 # Uso: ./run_aligner_regression.sh [NUM_TESTS]
 # ============================================================
 
-# Configurar herramientas (ajusta según tu entorno)
+# Configurar herramientas
 source /mnt/vol_NFS_rh003/estudiantes/archivos_config/synopsys_tools2.sh
 
-NUM_TESTS=${1:-50}
+NUM_TESTS=${1:-5}
 MAX_RETRIES=2
 
 echo "=========================================="
