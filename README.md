@@ -44,11 +44,11 @@ El proyecto está diseñado para ejecutarse en un entorno con soporte para Syste
 3. Ejecutar el script de regresión:
 
 ```bash
-./fifo_regresion.sh
+./aligner_regression.sh
 ```
-Por defecto, el script ejecuta 50 pruebas automatizadas. Es posible especificar la cantidad de iteraciones como argumento de entrada:
+Por defecto, el script ejecuta 5 pruebas automatizadas. Es posible especificar la cantidad de iteraciones como argumento de entrada:
 ```bash
-./fifo_regresion.sh 100
+./aligner_regression.sh 100
 ```
 
 ---
