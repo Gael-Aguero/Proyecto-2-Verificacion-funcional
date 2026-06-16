@@ -64,7 +64,7 @@ Por defecto, el script ejecuta 5 pruebas automatizadas. Es posible especificar l
 
 Para un análisis detallado de cada componente, consulte el reporte técnico completo:
 
-🔗 **Reporte:** [Ver documento](./Documentacion/Documentación%20Proyecto%201%20Verificación-%20AgueroG.AriasK..pdf)
+🔗 **Reporte:** [Ver documento](./Documentaci%C3%B3n/Proyecto%202%20Verificaci%C3%B3n-%20AgueroG.AriasK..pdf)
 
 ---
 
