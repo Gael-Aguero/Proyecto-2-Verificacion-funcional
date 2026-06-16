@@ -19,7 +19,7 @@ A diferencia de los entornos tradicionales, el sistema fue diseñado con un enfo
 El siguiente diagrama ilustra la jerarquía de componentes y el flujo de transacciones estructurado bajo la metodología UVM para este proyecto:
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Gael-Aguero/Proyecto-2-Verificacion-funcional/main/Imagenes/Imagen1.png" alt="Arquitectura Top Level" width="550px">
+  <img src="https://github.com/Gael-Aguero/Proyecto-2-Verificacion-funcional/blob/main/Documentaci%C3%B3n/Imagenes/Imagen1.png" alt="Arquitectura Top Level" width="550px">
 </p>
 
 El flujo de verificación e infraestructura de datos sigue el modelo estándar de UVM:
